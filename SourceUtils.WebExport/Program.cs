@@ -112,6 +112,7 @@ namespace SourceUtils.WebExport
             if ( !_sOpenMaps.TryGetValue( name, out var map ) ) return;
 
             _sOpenMaps.Remove( name );
+            TextureSource.ForgetMap( map.Name );
             map.Dispose();
         }
 

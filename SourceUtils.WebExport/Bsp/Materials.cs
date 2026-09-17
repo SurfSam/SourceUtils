@@ -58,22 +58,22 @@ namespace SourceUtils.WebExport.Bsp
                     prop.Type = MaterialPropertyType.TextureIndex;
 
                     var texUrl = (Url) prop.Value;
-                    int texIndex;
-                    if ( texDict.TryGetValue( texUrl, out texIndex ) )
-                    {
-                        prop.Value = texIndex;
-                        continue;
-                    }
+					if (texDict.TryGetValue(texUrl, out int texIndex))
+					{
+						prop.Value = texIndex;
+						continue;
+					}
 
-                    prop.Value = texIndex = page.Textures.Count;
+					prop.Value = texIndex = page.Textures.Count;
 
-                    var texPath = TextureController.GetTexturePath( texUrl );
-                    var tex = Texture.Get( bsp, texPath );
+                    var tex = TextureSource.TryParseUrl( texUrl, out var texPath, out _, out _ )
+                        ? Texture.Get( bsp, texPath )
+                        : null;
 
                     if ( tex == null )
                     {
                         Console.ForegroundColor = ConsoleColor.Yellow;
-                        Console.WriteLine($"Missing texture '{texPath}'!");
+                        Console.WriteLine($"Missing texture '{texPath ?? (string) texUrl}'!");
                         Console.ResetColor();
                     }
 

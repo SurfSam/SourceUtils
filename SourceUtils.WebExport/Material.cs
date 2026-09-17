@@ -121,13 +121,14 @@ namespace SourceUtils.WebExport
             if (!path.EndsWith(".vtf")) path = $"{path}.vtf";
 
             path = !path.Contains('/') ? $"{Path.GetDirectoryName(vmtPath)}/{path}" : $"materials/{path}";
+            path = TextureSource.NormalizePath(path);
+            if ( path == null ) return null;
 
-            if (bsp != null && bsp.PakFile.ContainsFile(path))
-            {
-                return $"/maps/{bsp.Name}/{path}.json";
-            }
+            var info = TextureSource.Resolve(bsp, path);
 
-            return $"/{path}.json";
+            return info == null
+                ? TextureSource.BuildUrl(path, null, null)
+                : TextureSource.BuildUrl(info.Path, info.Hash, null);
         }
 
         private static void AddMaterialProperties(Material mat, ValveMaterialFile vmt, string vmtPath, ValveBspFile bsp)
@@ -324,7 +325,9 @@ namespace SourceUtils.WebExport
                 {
                     hdrCompressed = texProp.Name == "hdrcompressedtexture";
 
-                    var tex = Texture.Get( bsp, TextureController.GetTexturePath( (Url) texProp.Value ) );
+                    var tex = TextureSource.TryParseUrl( (Url) texProp.Value, out var texPath, out _, out _ )
+                        ? Texture.Get( bsp, texPath )
+                        : null;
                     aspect = tex == null ? 1f : (float) tex.Width / tex.Height;
                 }
 
