@@ -110,14 +110,19 @@ namespace SourceUtils
                         // Wiki:
                         //   The compressed size of a game lump can be determined by subtracting the current game
                         //   lump's offset with that of the next entry. For this reason, when game lumps are compressed
-                        //   the last game lump is always an empty dummy which only contains the offset. 
+                        //   the last game lump is always an empty dummy which only contains the offset.
 
-                        for ( var i = 0; i < count; i++ )
+                        count -= 1;
+
+                        for ( var i = 0; i < items.Length - 1; i++ )
                         {
                             var item = items[i];
-                            var length = items[i + 1].FileOffset - item.FileOffset;
+
+                            // Some maps apparently have more than one dummy entry
 
                             if ( item.Id == 0 ) break;
+
+                            var length = items[i + 1].FileOffset - item.FileOffset;
 
                             _items.Add( GetIdString( item.Id ), item.WithLength( length ) );
                         }
