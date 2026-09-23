@@ -122,6 +122,7 @@
     <Compile Include="BspBuilder.cs" />
     <Compile Include="LeafAmbientTest.cs" />
     <Compile Include="LightStyleTest.cs" />
+    <Compile Include="VertexLightingTest.cs" />
     <Compile Include="TextureFormatTest.cs" />
     <Compile Include="GameLumpTest.cs" />
     <Compile Include="StaticPropTest.cs" />
