@@ -158,6 +158,27 @@ namespace SourceUtils.Test
         }
 
         [TestMethod]
+        public void ContentAddressedForHashedInfoAndImageUrls()
+        {
+            Assert.IsTrue( TextureSource.IsContentAddressed( TextureSource.BuildUrl( "materials/water/anim.vtf", Hash, null ) ) );
+            Assert.IsTrue( TextureSource.IsContentAddressed( TextureSource.BuildUrl( "materials/water/anim.vtf", Hash, "mip0.frame7.png" ) ) );
+        }
+
+        [TestMethod]
+        public void NotContentAddressedWithoutHash()
+        {
+            Assert.IsFalse( TextureSource.IsContentAddressed( TextureSource.BuildUrl( "materials/water/anim.vtf", null, null ) ) );
+        }
+
+        [TestMethod]
+        public void NotContentAddressedForOtherResources()
+        {
+            Assert.IsFalse( TextureSource.IsContentAddressed( "/maps/surf_x/geom/vispage0.json" ) );
+            Assert.IsFalse( TextureSource.IsContentAddressed( "/maps/surf_x/materials/matpage0.json" ) );
+            Assert.IsFalse( TextureSource.IsContentAddressed( "/maps/surf_x/lightmap.png" ) );
+        }
+
+        [TestMethod]
         public void ParseImageFileNameRejectsMalformedAndOverflowingIndices()
         {
             Assert.IsFalse( TextureSource.TryParseImageFileName( "mip.png", 2, 2, 2, out _, out _, out _ ) );

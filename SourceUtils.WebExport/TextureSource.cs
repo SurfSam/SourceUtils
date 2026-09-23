@@ -80,6 +80,15 @@ namespace SourceUtils.WebExport
             return true;
         }
 
+        /// <summary>
+        /// True if the url names a specific version of a texture by the hash of its contents, and
+        /// so can never go stale while the file it points at exists.
+        /// </summary>
+        public static bool IsContentAddressed( string url )
+        {
+            return TryParseUrl( url, out _, out var hash, out _ ) && hash != null;
+        }
+
         public static bool TryParseImageFileName( string fileName, int mipCount, int frameCount, int faceCount,
             out int mip, out int frame, out int face )
         {

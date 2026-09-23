@@ -154,6 +154,13 @@ namespace SourceUtils.WebExport
                         else Console.Write($"[{exported + skipped + failed + 1}/{_sExportUrls.Count - oldCount}] Exporting '{url}' ... ");
                     }
 
+                    // Skipped urls are normally still requested, because serving them is what
+                    // discovers the urls nested inside them. A content addressed url can't have
+                    // gone stale while its file exists, and neither can anything below it, so
+                    // there is nothing left to discover. One check skips a whole texture,
+                    // however many frames and mip levels it turns out to have.
+                    if ( skip && TextureSource.IsContentAddressed( url ) ) continue;
+
                     var dir = Path.GetDirectoryName(path);
                     if ( !args.DryRun && !Directory.Exists( dir ) )
                     {
