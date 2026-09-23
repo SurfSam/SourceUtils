@@ -292,6 +292,20 @@ namespace SourceUtils.WebExport
             return mat;
         }
 
+        /// <summary>
+        /// Textures a sky face could be drawn with, best first. The list is empty for skies
+        /// built from an environment cubemap (WindowImposter and friends), which have no base
+        /// texture at all.
+        /// </summary>
+        public static IEnumerable<MaterialProperty> GetSkyFaceTextures( Material mat )
+        {
+            var hdr = mat.Properties.FirstOrDefault( x => x.Name == "hdrcompressedtexture" );
+            var ldr = mat.Properties.FirstOrDefault( x => x.Name == "basetexture" );
+
+            if ( hdr != null ) yield return hdr;
+            if ( ldr != null ) yield return ldr;
+        }
+
         public static Material CreateSkyMaterial( ValveBspFile bsp, string skyName )
         {
             var postfixes = new[]
@@ -310,6 +324,7 @@ namespace SourceUtils.WebExport
 
             var hdrCompressed = false;
             var aspect = 1f;
+            var faceCount = 0;
 
             for ( var face = 0; face < 6; ++face )
             {
@@ -318,21 +333,42 @@ namespace SourceUtils.WebExport
 
                 if ( mat == null ) continue;
 
-                var texProp = mat.Properties.FirstOrDefault( x => x.Name == "hdrcompressedtexture")
-                    ?? mat.Properties.First(x => x.Name == "basetexture");
+                // The HDR texture is preferred, but plenty of maps name one without packing it,
+                // so each candidate has to actually resolve before it can be used.
+                MaterialProperty texProp = null;
+                Texture faceTex = null;
 
-                if ( face == 0 )
+                foreach ( var candidate in GetSkyFaceTextures( mat ) )
                 {
-                    hdrCompressed = texProp.Name == "hdrcompressedtexture";
-
-                    var tex = TextureSource.TryParseUrl( (Url) texProp.Value, out var texPath, out _, out _ )
+                    faceTex = TextureSource.TryParseUrl( (Url) candidate.Value, out var texPath, out _, out _ )
                         ? Texture.Get( bsp, texPath )
                         : null;
-                    aspect = tex == null ? 1f : (float) tex.Width / tex.Height;
+
+                    if ( faceTex == null ) continue;
+
+                    texProp = candidate;
+                    break;
+                }
+
+                if ( texProp == null )
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine( $"Sky material '{matPath}' has no texture to draw with!" );
+                    Console.ResetColor();
+                    continue;
+                }
+
+                if ( faceCount++ == 0 )
+                {
+                    hdrCompressed = texProp.Name == "hdrcompressedtexture";
+                    aspect = (float) faceTex.Width / faceTex.Height;
                 }
 
                 skyMaterial.SetTextureUrl($"face{names[face]}", (Url)texProp.Value);
             }
+
+            // Nothing to draw the sky with, so the map is better off without one.
+            if ( faceCount == 0 ) return null;
 
             if ( hdrCompressed )
             {
