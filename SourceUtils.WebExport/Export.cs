@@ -11,13 +11,38 @@ using Ziks.WebServer;
 namespace SourceUtils.WebExport
 {
     [Verb("export", HelpText = "Export one or more maps for serving over HTTP.")]
-    class ExportOptions : BaseOptions
+    public class ExportOptions : BaseOptions
     {
         [Option('o', "outdir", HelpText = "Output directory.", Required = true)]
         public string OutDir { get; set; }
 
-        [Option('r', "overwrite", HelpText = "Overwrite existing exported files.")]
+        [Option('r', "overwrite", HelpText = "Overwrite every existing exported file (implies --overwrite-maps and --overwrite-materials).")]
         public bool Overwrite { get; set; }
+
+        [Option("overwrite-maps", HelpText = "Overwrite existing exported map files.")]
+        public bool OverwriteMaps { get; set; }
+
+        [Option("overwrite-materials", HelpText = "Overwrite existing exported material files. Needed to pick up changes to how textures are converted, which the content hash of a source .vtf can't see.")]
+        public bool OverwriteMaterials { get; set; }
+
+        /// <summary>
+        /// Which of the exported files this run is willing to replace. Static viewer files are
+        /// always replaced: they belong to the build rather than to any map or texture, and a
+        /// stale one is a broken viewer for the sake of a few bytes.
+        /// </summary>
+        public bool ShouldOverwrite( string url )
+        {
+            if ( Overwrite ) return true;
+            if ( TextureSource.IsMaterialUrl( url ) ) return OverwriteMaterials;
+            if ( IsMapUrl( url ) ) return OverwriteMaps;
+
+            return true;
+        }
+
+        private static bool IsMapUrl( string url )
+        {
+            return url != null && url.StartsWith( "/maps/", StringComparison.Ordinal );
+        }
 
         [Option('p', "url-prefix", HelpText = "Prefix to prepend to each exported URL." )]
         public string UrlPrefix { get; set; } = "";
@@ -140,7 +165,7 @@ namespace SourceUtils.WebExport
                     var url = _sToExport.Dequeue();
 
                     var path = Path.Combine(args.OutDir, url.Value.Substring(1));
-                    var skip = !args.Overwrite && File.Exists(path);
+                    var skip = !args.ShouldOverwrite(url) && File.Exists(path);
 
                     if ( skip )
                     {

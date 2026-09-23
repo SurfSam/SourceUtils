@@ -119,6 +119,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ExportOverwriteTest.cs" />
     <Compile Include="BspBuilder.cs" />
     <Compile Include="LeafAmbientTest.cs" />
     <Compile Include="LightStyleTest.cs" />

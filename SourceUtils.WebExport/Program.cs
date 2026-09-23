@@ -14,7 +14,7 @@ using Ziks.WebServer;
 
 namespace SourceUtils.WebExport
 {
-    class BaseOptions
+    public class BaseOptions
     {
         [Option('g', "gamedir", HelpText = "Game directory to export from.", Required = true)]
         public string GameDir { get; set; }

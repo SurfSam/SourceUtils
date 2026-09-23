@@ -158,6 +158,23 @@ namespace SourceUtils.Test
         }
 
         [TestMethod]
+        public void MaterialUrlCoversEveryFormUnderTheMaterialsFolder()
+        {
+            Assert.IsTrue( TextureSource.IsMaterialUrl( TextureSource.BuildUrl( "materials/water/anim.vtf", Hash, null ) ) );
+            Assert.IsTrue( TextureSource.IsMaterialUrl( TextureSource.BuildUrl( "materials/water/anim.vtf", Hash, "mip0.png" ) ) );
+            Assert.IsTrue( TextureSource.IsMaterialUrl( TextureSource.BuildUrl( "materials/water/anim.vtf", null, null ) ) );
+        }
+
+        [TestMethod]
+        public void MaterialUrlExcludesMapsAndStaticFiles()
+        {
+            Assert.IsFalse( TextureSource.IsMaterialUrl( "/maps/surf_x/materials/matpage0.json" ) );
+            Assert.IsFalse( TextureSource.IsMaterialUrl( "/maps/surf_x/index.html" ) );
+            Assert.IsFalse( TextureSource.IsMaterialUrl( "/js/sourceutils.js" ) );
+            Assert.IsFalse( TextureSource.IsMaterialUrl( null ) );
+        }
+
+        [TestMethod]
         public void ContentAddressedForHashedInfoAndImageUrls()
         {
             Assert.IsTrue( TextureSource.IsContentAddressed( TextureSource.BuildUrl( "materials/water/anim.vtf", Hash, null ) ) );

@@ -81,6 +81,15 @@ namespace SourceUtils.WebExport
         }
 
         /// <summary>
+        /// True if the url points into the global materials folder, whatever form it takes. Note
+        /// that a map's own material page lives under /maps and is not one of these.
+        /// </summary>
+        public static bool IsMaterialUrl( string url )
+        {
+            return url != null && url.StartsWith( UrlPrefix, StringComparison.Ordinal );
+        }
+
+        /// <summary>
         /// True if the url names a specific version of a texture by the hash of its contents, and
         /// so can never go stale while the file it points at exists.
         /// </summary>
