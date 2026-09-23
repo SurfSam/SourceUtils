@@ -29,7 +29,9 @@ namespace SourceUtils.WebExport.Bsp
         [Get("/ambientpage{page}.json")]
         public AmbientPage Get( [Url] string map, [Url] int page )
         {
-            if ( Skip ) return null;
+            // A skipped page still has to be a valid response. Returning null writes nothing at
+            // all, which drops the connection and has the exporter count the file as failed.
+            if ( Skip ) return new AmbientPage { Values = Enumerable.Empty<List<AmbientCube>>() };
 
             var bsp = Program.GetMap(map);
             var first = page * AmbientPage.LeavesPerPage;
