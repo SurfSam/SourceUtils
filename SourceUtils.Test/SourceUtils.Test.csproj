@@ -121,6 +121,7 @@
   <ItemGroup>
     <Compile Include="BspBuilder.cs" />
     <Compile Include="LeafAmbientTest.cs" />
+    <Compile Include="LightStyleTest.cs" />
     <Compile Include="GameLumpTest.cs" />
     <Compile Include="KeyValsTest.cs" />
     <Compile Include="TextureSourceTest.cs" />

@@ -516,6 +516,14 @@ namespace SourceUtils.ValveBsp
             return color.R | (color.G << 8) | (color.B << 16) | ((color.Exponent + 128) << 24);
         }
 
+        public ColorRGBExp32( byte r, byte g, byte b, sbyte exponent )
+        {
+            R = r;
+            G = g;
+            B = b;
+            Exponent = exponent;
+        }
+
         public readonly byte R;
         public readonly byte G;
         public readonly byte B;
