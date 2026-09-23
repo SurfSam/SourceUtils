@@ -534,6 +534,15 @@ namespace SourceUtils.ValveBsp
     [StructLayout( LayoutKind.Sequential, Pack = 1 )]
     public struct LeafAmbientLighting
     {
+        public LeafAmbientLighting( CompressedLightCube cube, byte x, byte y, byte z )
+        {
+            Cube = cube;
+            X = x;
+            Y = y;
+            Z = z;
+            _padding = 0;
+        }
+
         public readonly CompressedLightCube Cube;
         public readonly byte X;
         public readonly byte Y;
