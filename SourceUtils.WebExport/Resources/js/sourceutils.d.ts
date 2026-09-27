@@ -370,6 +370,8 @@ declare namespace SourceUtils {
         private static nextId;
         private static readonly callbacks;
         static getJson<TPayload>(url: string, success: (payload: TPayload) => void, failure?: (error: any) => void, progress?: (loaded: number, total: number) => void): void;
+        /** The worker itself broke (not one request): finish everything on the main thread from now on. */
+        private static abandonWorker;
         private static getWorker;
     }
 }

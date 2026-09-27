@@ -15,7 +15,12 @@ namespace SourceUtils {
         private static failed = false;
         private static nextId = 1;
         private static readonly callbacks: {
-            [id: number]: { success: (payload: any) => void, failure: (error: any) => void }
+            [id: number]: {
+                url: string,
+                success: (payload: any) => void,
+                failure: (error: any) => void,
+                progress: (loaded: number, total: number) => void
+            }
         } = {};
 
         static getJson<TPayload>(url: string, success: (payload: TPayload) => void,
@@ -27,8 +32,22 @@ namespace SourceUtils {
             }
 
             const id = PageWorker.nextId++;
-            PageWorker.callbacks[id] = { success: success, failure: failure };
+            PageWorker.callbacks[id] = { url: url, success: success, failure: failure, progress: progress };
             worker.postMessage({ id: id, url: new URL(url, document.baseURI).href });
+        }
+
+        /** The worker itself broke (not one request): finish everything on the main thread from now on. */
+        private static abandonWorker(error: any): void {
+            console.warn("Page worker failed, decoding pages on the main thread:", error);
+            PageWorker.worker.terminate();
+            PageWorker.worker = null;
+            PageWorker.failed = true;
+            const pending = PageWorker.callbacks;
+            for (const id in pending) {
+                const callback = pending[id];
+                delete pending[id];
+                Facepunch.Http.getJson(callback.url, callback.success, callback.failure, callback.progress);
+            }
         }
 
         private static getWorker(): Worker {
@@ -54,6 +73,10 @@ namespace SourceUtils {
                 } else {
                     callback.success(msg.page);
                 }
+            };
+            PageWorker.worker.onerror = ev => {
+                ev.preventDefault();
+                PageWorker.abandonWorker(ev.message);
             };
 
             return PageWorker.worker;

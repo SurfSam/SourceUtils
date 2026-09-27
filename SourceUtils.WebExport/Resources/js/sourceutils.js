@@ -1202,8 +1202,21 @@ var SourceUtils;
                 return;
             }
             var id = PageWorker.nextId++;
-            PageWorker.callbacks[id] = { success: success, failure: failure };
+            PageWorker.callbacks[id] = { url: url, success: success, failure: failure, progress: progress };
             worker.postMessage({ id: id, url: new URL(url, document.baseURI).href });
+        };
+        /** The worker itself broke (not one request): finish everything on the main thread from now on. */
+        PageWorker.abandonWorker = function (error) {
+            console.warn("Page worker failed, decoding pages on the main thread:", error);
+            PageWorker.worker.terminate();
+            PageWorker.worker = null;
+            PageWorker.failed = true;
+            var pending = PageWorker.callbacks;
+            for (var id in pending) {
+                var callback = pending[id];
+                delete pending[id];
+                Facepunch.Http.getJson(callback.url, callback.success, callback.failure, callback.progress);
+            }
         };
         PageWorker.getWorker = function () {
             if (PageWorker.worker != null || PageWorker.failed)
@@ -1232,6 +1245,10 @@ var SourceUtils;
                 else {
                     callback.success(msg.page);
                 }
+            };
+            PageWorker.worker.onerror = function (ev) {
+                ev.preventDefault();
+                PageWorker.abandonWorker(ev.message);
             };
             return PageWorker.worker;
         };
