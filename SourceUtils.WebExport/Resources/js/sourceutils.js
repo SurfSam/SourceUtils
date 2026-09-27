@@ -2,10 +2,12 @@ var __extends = (this && this.__extends) || (function () {
     var extendStatics = function (d, b) {
         extendStatics = Object.setPrototypeOf ||
             ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
-            function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
+            function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
         return extendStatics(d, b);
     };
     return function (d, b) {
+        if (typeof b !== "function" && b !== null)
+            throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
         extendStatics(d, b);
         function __() { this.constructor = d; }
         d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
@@ -72,7 +74,7 @@ var SourceUtils;
                 }
             }
             if (this.throwIfNotFound) {
-                throw new Error("Unable to find page for index " + index + ".");
+                throw new Error("Unable to find page for index ".concat(index, "."));
             }
         };
         PagedLoader.prototype.setPageLayout = function (pages) {
@@ -108,7 +110,7 @@ var SourceUtils;
                     return "break";
                 var lastProgress = 0;
                 ++this_1.active;
-                Facepunch.Http.getJson(next.url, function (page) {
+                SourceUtils.PageWorker.getJson(next.url, function (page) {
                     --_this.active;
                     _this.loadProgress += 1 - lastProgress;
                     lastProgress = 1;
@@ -416,6 +418,52 @@ var SourceUtils;
         return DispGeometryLoader;
     }(SourceUtils.PagedLoader));
     SourceUtils.DispGeometryLoader = DispGeometryLoader;
+})(SourceUtils || (SourceUtils = {}));
+var SourceUtils;
+(function (SourceUtils) {
+    /**
+     * Replaces Facepunch.Http.getImage with fetch + createImageBitmap, so
+     * texture images are decoded off the main thread instead of synchronously
+     * inside texImage2D. Bitmaps match WebGame's upload defaults (no flip, no
+     * premultiplied alpha). Browsers without createImageBitmap keep <img>.
+     */
+    var ImageBitmapLoader = /** @class */ (function () {
+        function ImageBitmapLoader() {
+        }
+        ImageBitmapLoader.install = function () {
+            if (ImageBitmapLoader.installed)
+                return;
+            ImageBitmapLoader.installed = true;
+            if (typeof createImageBitmap !== "function" || typeof fetch !== "function")
+                return;
+            var fallback = Facepunch.Http.getImage;
+            Facepunch.Http.getImage = function (url, success, failure, progress) {
+                fetch(url)
+                    .then(function (response) {
+                    if (!response.ok)
+                        throw new Error("".concat(response.status, " ").concat(response.statusText, ": ").concat(url));
+                    return response.blob();
+                })
+                    .then(function (blob) { return createImageBitmap(blob, {
+                    premultiplyAlpha: "none",
+                    colorSpaceConversion: "default",
+                    imageOrientation: "none"
+                }); })
+                    .then(function (bitmap) {
+                    if (progress != null)
+                        progress(1, 1);
+                    success(bitmap);
+                }, function (error) {
+                    // e.g. a format createImageBitmap rejects: let <img> try.
+                    console.warn("createImageBitmap failed for ".concat(url, ", falling back to <img>:"), error);
+                    fallback(url, success, failure, progress);
+                });
+            };
+        };
+        ImageBitmapLoader.installed = false;
+        return ImageBitmapLoader;
+    }());
+    SourceUtils.ImageBitmapLoader = ImageBitmapLoader;
 })(SourceUtils || (SourceUtils = {}));
 /// <reference path="PagedLoader.ts"/>
 var SourceUtils;
@@ -765,7 +813,9 @@ var SourceUtils;
     var MapViewer = /** @class */ (function (_super) {
         __extends(MapViewer, _super);
         function MapViewer(container) {
-            var _this = _super.call(this, container) || this;
+            var _this = this;
+            SourceUtils.ImageBitmapLoader.install();
+            _this = _super.call(this, container) || this;
             _this.map = new SourceUtils.Map(_this);
             _this.visLoader = _this.addLoader(new SourceUtils.VisLoader());
             _this.bspModelLoader = _this.addLoader(new SourceUtils.BspModelLoader(_this));
@@ -785,6 +835,14 @@ var SourceUtils;
             _this.lookQuat = new Facepunch.Quaternion();
             _this.frameCount = 0;
             _this.allLoaded = false;
+            /**
+             * Milliseconds per frame spent on work queued with deferWork. Keeps a
+             * burst of loaded resources (e.g. every static prop of a model page)
+             * from stalling the frame; at least one item runs per frame.
+             */
+            _this.deferredWorkBudgetMs = 4;
+            _this.deferredWork = [];
+            _this.deferredWorkIndex = 0;
             _this.onUpdateFrame_temp = new Facepunch.Vector3();
             container.classList.add("map-viewer");
             return _this;
@@ -834,12 +892,12 @@ var SourceUtils;
                 if (!value.hasOwnProperty(key))
                     continue;
                 if (!MapViewer.hashKeyRegex.test(key)) {
-                    console.warn("Invalid hash object key: " + key);
+                    console.warn("Invalid hash object key: ".concat(key));
                     continue;
                 }
                 var val = value[key];
                 if (typeof val !== "number" && (typeof val !== "string" || isNaN(parseFloat(val)))) {
-                    console.warn("Invalid hash object value: " + val);
+                    console.warn("Invalid hash object value: ".concat(val));
                     continue;
                 }
                 hash += key;
@@ -992,8 +1050,27 @@ var SourceUtils;
                 }
             }
         };
+        /** Queues main-thread work to run over the next frames within deferredWorkBudgetMs. */
+        MapViewer.prototype.deferWork = function (work) {
+            this.deferredWork.push(work);
+        };
+        MapViewer.prototype.runDeferredWork = function () {
+            var queue = this.deferredWork;
+            if (this.deferredWorkIndex >= queue.length)
+                return;
+            var deadline = performance.now() + this.deferredWorkBudgetMs;
+            do {
+                var work = queue[this.deferredWorkIndex++];
+                work();
+            } while (this.deferredWorkIndex < queue.length && performance.now() < deadline);
+            if (this.deferredWorkIndex >= queue.length) {
+                queue.length = 0;
+                this.deferredWorkIndex = 0;
+            }
+        };
         MapViewer.prototype.onUpdateFrame = function (dt) {
             _super.prototype.onUpdateFrame.call(this, dt);
+            this.runDeferredWork();
             this.map.update(dt);
             if (this.showDebugPanel !== this.debugPanelVisible) {
                 this.debugPanelVisible = this.showDebugPanel;
@@ -1101,6 +1178,221 @@ var SourceUtils;
         return MapViewer;
     }(WebGame.Game));
     SourceUtils.MapViewer = MapViewer;
+})(SourceUtils || (SourceUtils = {}));
+var SourceUtils;
+(function (SourceUtils) {
+    /**
+     * Downloads, parses and decompresses resource pages on a Web Worker so
+     * that the main thread (and every map viewer on the page) keeps drawing
+     * frames while a map streams in.
+     *
+     * The worker replaces LZ-compressed mesh vertex/index strings with
+     * transferred Float32Array/Uint32Array buffers and vertex lighting strings
+     * with arrays; the page loaders' decompress calls then pass these through
+     * unchanged. Falls back to Facepunch.Http.getJson when workers are
+     * unavailable (e.g. blocked by a content security policy).
+     */
+    var PageWorker = /** @class */ (function () {
+        function PageWorker() {
+        }
+        PageWorker.getJson = function (url, success, failure, progress) {
+            var worker = PageWorker.getWorker();
+            if (worker == null) {
+                Facepunch.Http.getJson(url, success, failure, progress);
+                return;
+            }
+            var id = PageWorker.nextId++;
+            PageWorker.callbacks[id] = { success: success, failure: failure };
+            worker.postMessage({ id: id, url: new URL(url, document.baseURI).href });
+        };
+        PageWorker.getWorker = function () {
+            if (PageWorker.worker != null || PageWorker.failed)
+                return PageWorker.worker;
+            try {
+                var source = "(".concat(pageWorkerMain.toString(), ")();");
+                var blobUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+                PageWorker.worker = new Worker(blobUrl);
+                URL.revokeObjectURL(blobUrl);
+            }
+            catch (e) {
+                console.warn("Page worker unavailable, decoding pages on the main thread:", e);
+                PageWorker.failed = true;
+                return null;
+            }
+            PageWorker.worker.onmessage = function (ev) {
+                var msg = ev.data;
+                var callback = PageWorker.callbacks[msg.id];
+                delete PageWorker.callbacks[msg.id];
+                if (callback == null)
+                    return;
+                if (msg.error != null) {
+                    if (callback.failure != null)
+                        callback.failure(msg.error);
+                }
+                else {
+                    callback.success(msg.page);
+                }
+            };
+            return PageWorker.worker;
+        };
+        PageWorker.worker = null;
+        PageWorker.failed = false;
+        PageWorker.nextId = 1;
+        PageWorker.callbacks = {};
+        return PageWorker;
+    }());
+    SourceUtils.PageWorker = PageWorker;
+    /**
+     * Worker entry point. Serialized with toString(), so it must be
+     * self-contained: no references to anything outside its own body.
+     */
+    function pageWorkerMain() {
+        var base64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+        var base64Values = new Int8Array(128);
+        for (var i = 0; i < base64.length; ++i)
+            base64Values[base64.charCodeAt(i)] = i;
+        // lz-string 1.4.4 decompressFromBase64 (WTFPL, Pieroxy), as in Facepunch.LZString.
+        function lzDecompressFromBase64(input) {
+            if (input == null)
+                return "";
+            if (input === "")
+                return null;
+            var length = input.length;
+            var resetValue = 32;
+            var dictionary = [];
+            var enlargeIn = 4;
+            var dictSize = 4;
+            var numBits = 3;
+            var entry = "";
+            var result = [];
+            var w;
+            var c;
+            var val = base64Values[input.charCodeAt(0)];
+            var position = resetValue;
+            var index = 1;
+            function readBits(count) {
+                var bits = 0;
+                var maxpower = 1 << count;
+                var power = 1;
+                while (power !== maxpower) {
+                    var resb = val & position;
+                    position >>= 1;
+                    if (position === 0) {
+                        position = resetValue;
+                        val = base64Values[input.charCodeAt(index++)];
+                    }
+                    bits |= (resb > 0 ? 1 : 0) * power;
+                    power <<= 1;
+                }
+                return bits;
+            }
+            for (var i = 0; i < 3; ++i)
+                dictionary[i] = String.fromCharCode(i);
+            switch (readBits(2)) {
+                case 0:
+                    c = String.fromCharCode(readBits(8));
+                    break;
+                case 1:
+                    c = String.fromCharCode(readBits(16));
+                    break;
+                case 2: return "";
+            }
+            dictionary[3] = c;
+            w = c;
+            result.push(c);
+            while (true) {
+                if (index > length)
+                    return "";
+                var code = readBits(numBits);
+                switch (code) {
+                    case 0:
+                        dictionary[dictSize++] = String.fromCharCode(readBits(8));
+                        code = dictSize - 1;
+                        enlargeIn--;
+                        break;
+                    case 1:
+                        dictionary[dictSize++] = String.fromCharCode(readBits(16));
+                        code = dictSize - 1;
+                        enlargeIn--;
+                        break;
+                    case 2:
+                        return result.join("");
+                }
+                if (enlargeIn === 0) {
+                    enlargeIn = 1 << numBits;
+                    numBits++;
+                }
+                if (dictionary[code]) {
+                    entry = dictionary[code];
+                }
+                else if (code === dictSize) {
+                    entry = w + w.charAt(0);
+                }
+                else {
+                    return null;
+                }
+                result.push(entry);
+                dictionary[dictSize++] = w + entry.charAt(0);
+                enlargeIn--;
+                w = entry;
+                if (enlargeIn === 0) {
+                    enlargeIn = 1 << numBits;
+                    numBits++;
+                }
+            }
+        }
+        function decompress(value) {
+            return typeof value === "string" ? JSON.parse(lzDecompressFromBase64(value)) : value;
+        }
+        function prepareMesh(meshData, transfer) {
+            if (meshData == null)
+                return;
+            var vertices = new Float32Array(decompress(meshData.vertices));
+            var indices = new Uint32Array(decompress(meshData.indices));
+            meshData.vertices = vertices;
+            meshData.indices = indices;
+            transfer.push(vertices.buffer, indices.buffer);
+        }
+        /** Leaf, displacement and studio model pages carry materials[].meshData; vertex lighting pages carry props. */
+        function preparePage(page, transfer) {
+            if (page == null || typeof page !== "object")
+                return;
+            if (Array.isArray(page.materials)) {
+                for (var _i = 0, _a = page.materials; _i < _a.length; _i++) {
+                    var material = _a[_i];
+                    if (material != null)
+                        prepareMesh(material.meshData, transfer);
+                }
+            }
+            if (Array.isArray(page.props)) {
+                for (var _b = 0, _c = page.props; _b < _c.length; _b++) {
+                    var prop = _c[_b];
+                    if (prop == null)
+                        continue;
+                    for (var j = 0; j < prop.length; ++j)
+                        prop[j] = decompress(prop[j]);
+                }
+            }
+        }
+        self.onmessage = function (ev) {
+            var msg = ev.data;
+            fetch(msg.url)
+                .then(function (response) {
+                if (!response.ok)
+                    throw new Error("".concat(response.status, " ").concat(response.statusText, ": ").concat(msg.url));
+                return response.text();
+            })
+                .then(function (text) {
+                var page = JSON.parse(text);
+                var transfer = [];
+                preparePage(page, transfer);
+                self.postMessage({ id: msg.id, page: page }, transfer);
+            })
+                .catch(function (error) {
+                self.postMessage({ id: msg.id, error: String(error) });
+            });
+        };
+    }
 })(SourceUtils || (SourceUtils = {}));
 var SourceUtils;
 (function (SourceUtils) {
@@ -1896,11 +2188,15 @@ var SourceUtils;
                 return _this;
             }
             StaticProp.prototype.checkLoaded = function () {
+                var _this = this;
                 if (!this.model.isLoaded())
                     return;
                 if (this.lighting === undefined)
                     return;
-                this.drawable.addMeshHandles(this.model.createMeshHandles(0, this.getMatrix(), this.lighting, this.albedoModulation));
+                // Building a prop's meshes is costly and a model page loads many props at once.
+                this.map.viewer.deferWork(function () {
+                    _this.drawable.addMeshHandles(_this.model.createMeshHandles(0, _this.getMatrix(), _this.lighting, _this.albedoModulation));
+                });
             };
             return StaticProp;
         }(Entities.PvsEntity));
@@ -2035,8 +2331,8 @@ var SourceUtils;
                 _this.uEmission = _this.addUniform("uEmission", WebGame.Uniform1I);
                 _this.uEmissionTint = _this.addUniform("uEmissionTint", WebGame.Uniform3F);
                 var gl = context;
-                _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec3 aPosition;\n                    attribute vec2 aTextureCoord;\n\n                    varying vec2 vTextureCoord;\n                    varying float vDepth;\n\n                    uniform mat4 " + _this.uProjection + ";\n                    uniform mat4 " + _this.uView + ";\n                    uniform mat4 " + _this.uModel + ";\n\n                    uniform mediump int " + _this.uEmission + ";\n\n                    void ModelBase_main()\n                    {\n                        vec4 viewPos = " + _this.uView + " * " + _this.uModel + " * vec4(aPosition, 1.0);\n\n                        gl_Position = " + _this.uProjection + " * viewPos;\n\n                        vTextureCoord = aTextureCoord;\n                        vDepth = -viewPos.z;\n                    }");
-                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    varying vec2 vTextureCoord;\n                    varying float vDepth;\n\n                    uniform sampler2D " + _this.uBaseTexture + ";\n\n                    uniform float " + _this.uAlphaTest + ";   // [0, 1]\n                    uniform float " + _this.uTranslucent + "; // [0, 1]\n                    uniform float " + _this.uAlpha + ";       // [0..1]\n\n                    uniform vec4 " + _this.uFogParams + ";\n                    uniform vec3 " + _this.uFogColor + ";\n                    uniform int " + _this.uFogEnabled + ";\n\n                    uniform int " + _this.uEmission + ";\n                    uniform vec3 " + _this.uEmissionTint + ";\n\n                    vec3 ApplyFog(vec3 inColor)\n                    {\n                        if (" + _this.uFogEnabled + " == 0) return inColor;\n\n                        float fogDensity = " + _this.uFogParams + ".x + " + _this.uFogParams + ".y * vDepth;\n                        fogDensity = min(max(fogDensity, " + _this.uFogParams + ".z), " + _this.uFogParams + ".w);\n                        return mix(inColor, " + _this.uFogColor + ", fogDensity);\n                    }\n\n                    vec4 ModelBase_main()\n                    {\n                        vec4 sample = texture2D(" + _this.uBaseTexture + ", vTextureCoord);\n                        if (sample.a <= " + _this.uAlphaTest + " - 0.5) discard;\n\n                        float alpha = mix(1.0, " + _this.uAlpha + " * sample.a, " + _this.uTranslucent + ");\n\n                        if (" + _this.uEmission + " != 0)\n                        {\n                            sample.rgb += " + _this.uEmissionTint + ";\n                        }\n\n                        return vec4(sample.rgb, alpha);\n                    }");
+                _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec3 aPosition;\n                    attribute vec2 aTextureCoord;\n\n                    varying vec2 vTextureCoord;\n                    varying float vDepth;\n\n                    uniform mat4 ".concat(_this.uProjection, ";\n                    uniform mat4 ").concat(_this.uView, ";\n                    uniform mat4 ").concat(_this.uModel, ";\n\n                    uniform mediump int ").concat(_this.uEmission, ";\n\n                    void ModelBase_main()\n                    {\n                        vec4 viewPos = ").concat(_this.uView, " * ").concat(_this.uModel, " * vec4(aPosition, 1.0);\n\n                        gl_Position = ").concat(_this.uProjection, " * viewPos;\n\n                        vTextureCoord = aTextureCoord;\n                        vDepth = -viewPos.z;\n                    }"));
+                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    varying vec2 vTextureCoord;\n                    varying float vDepth;\n\n                    uniform sampler2D ".concat(_this.uBaseTexture, ";\n\n                    uniform float ").concat(_this.uAlphaTest, ";   // [0, 1]\n                    uniform float ").concat(_this.uTranslucent, "; // [0, 1]\n                    uniform float ").concat(_this.uAlpha, ";       // [0..1]\n\n                    uniform vec4 ").concat(_this.uFogParams, ";\n                    uniform vec3 ").concat(_this.uFogColor, ";\n                    uniform int ").concat(_this.uFogEnabled, ";\n\n                    uniform int ").concat(_this.uEmission, ";\n                    uniform vec3 ").concat(_this.uEmissionTint, ";\n\n                    vec3 ApplyFog(vec3 inColor)\n                    {\n                        if (").concat(_this.uFogEnabled, " == 0) return inColor;\n\n                        float fogDensity = ").concat(_this.uFogParams, ".x + ").concat(_this.uFogParams, ".y * vDepth;\n                        fogDensity = min(max(fogDensity, ").concat(_this.uFogParams, ".z), ").concat(_this.uFogParams, ".w);\n                        return mix(inColor, ").concat(_this.uFogColor, ", fogDensity);\n                    }\n\n                    vec4 ModelBase_main()\n                    {\n                        vec4 sample = texture2D(").concat(_this.uBaseTexture, ", vTextureCoord);\n                        if (sample.a <= ").concat(_this.uAlphaTest, " - 0.5) discard;\n\n                        float alpha = mix(1.0, ").concat(_this.uAlpha, " * sample.a, ").concat(_this.uTranslucent, ");\n\n                        if (").concat(_this.uEmission, " != 0)\n                        {\n                            sample.rgb += ").concat(_this.uEmissionTint, ";\n                        }\n\n                        return vec4(sample.rgb, alpha);\n                    }"));
                 _this.addAttribute("aPosition", WebGame.VertexAttribute.position);
                 _this.addAttribute("aTextureCoord", WebGame.VertexAttribute.uv);
                 _this.uBaseTexture.setDefault(WebGame.TextureUtils.getErrorTexture(context));
@@ -2102,7 +2398,7 @@ var SourceUtils;
                 _this.uLightmap = _this.addUniform("uLightmap", WebGame.UniformSampler);
                 var gl = context;
                 _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec2 aLightmapCoord;\n\n                    varying vec2 vLightmapCoord;\n\n                    void LightmappedBase_main()\n                    {\n                        ModelBase_main();\n\n                        vLightmapCoord = aLightmapCoord;\n                    }");
-                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    varying vec2 vLightmapCoord;\n\n                    uniform sampler2D " + _this.uLightmap + ";\n                    uniform vec4 " + _this.uLightmap.getSizeUniform() + ";\n\n                    vec3 DecompressLightmapSample(vec4 sample)\n                    {\n                        float exp = sample.a * 255.0 - 128.0;\n                        return sample.rgb * pow(2.0, exp);\n                    }\n\n                    vec3 ApplyLightmap(vec3 inColor)\n                    {\n                        const float gamma = 1.0 / 2.2;\n\n                        vec2 size = " + _this.uLightmap.getSizeUniform() + ".xy;\n                        vec2 invSize = " + _this.uLightmap.getSizeUniform() + ".zw;\n                        vec2 scaledCoord = vLightmapCoord * size - vec2(0.5, 0.5);\n                        vec2 minCoord = floor(scaledCoord) + vec2(0.5, 0.5);\n                        vec2 maxCoord = minCoord + vec2(1.0, 1.0);\n                        vec2 delta = scaledCoord - floor(scaledCoord);\n\n                        minCoord *= invSize;\n                        maxCoord *= invSize;\n\n                        vec3 sampleA = DecompressLightmapSample(texture2D(" + _this.uLightmap + ", vec2(minCoord.x, minCoord.y)));\n                        vec3 sampleB = DecompressLightmapSample(texture2D(" + _this.uLightmap + ", vec2(maxCoord.x, minCoord.y)));\n                        vec3 sampleC = DecompressLightmapSample(texture2D(" + _this.uLightmap + ", vec2(minCoord.x, maxCoord.y)));\n                        vec3 sampleD = DecompressLightmapSample(texture2D(" + _this.uLightmap + ", vec2(maxCoord.x, maxCoord.y)));\n\n                        vec3 sample = mix(mix(sampleA, sampleB, delta.x), mix(sampleC, sampleD, delta.x), delta.y);\n\n                        return inColor * pow(sample, vec3(gamma, gamma, gamma));\n                    }");
+                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    varying vec2 vLightmapCoord;\n\n                    uniform sampler2D ".concat(_this.uLightmap, ";\n                    uniform vec4 ").concat(_this.uLightmap.getSizeUniform(), ";\n\n                    vec3 DecompressLightmapSample(vec4 sample)\n                    {\n                        float exp = sample.a * 255.0 - 128.0;\n                        return sample.rgb * pow(2.0, exp);\n                    }\n\n                    vec3 ApplyLightmap(vec3 inColor)\n                    {\n                        const float gamma = 1.0 / 2.2;\n\n                        vec2 size = ").concat(_this.uLightmap.getSizeUniform(), ".xy;\n                        vec2 invSize = ").concat(_this.uLightmap.getSizeUniform(), ".zw;\n                        vec2 scaledCoord = vLightmapCoord * size - vec2(0.5, 0.5);\n                        vec2 minCoord = floor(scaledCoord) + vec2(0.5, 0.5);\n                        vec2 maxCoord = minCoord + vec2(1.0, 1.0);\n                        vec2 delta = scaledCoord - floor(scaledCoord);\n\n                        minCoord *= invSize;\n                        maxCoord *= invSize;\n\n                        vec3 sampleA = DecompressLightmapSample(texture2D(").concat(_this.uLightmap, ", vec2(minCoord.x, minCoord.y)));\n                        vec3 sampleB = DecompressLightmapSample(texture2D(").concat(_this.uLightmap, ", vec2(maxCoord.x, minCoord.y)));\n                        vec3 sampleC = DecompressLightmapSample(texture2D(").concat(_this.uLightmap, ", vec2(minCoord.x, maxCoord.y)));\n                        vec3 sampleD = DecompressLightmapSample(texture2D(").concat(_this.uLightmap, ", vec2(maxCoord.x, maxCoord.y)));\n\n                        vec3 sample = mix(mix(sampleA, sampleB, delta.x), mix(sampleC, sampleD, delta.x), delta.y);\n\n                        return inColor * pow(sample, vec3(gamma, gamma, gamma));\n                    }"));
                 _this.addAttribute("aLightmapCoord", WebGame.VertexAttribute.uv2);
                 _this.uLightmap.setDefault(WebGame.TextureUtils.getWhiteTexture(context));
                 return _this;
@@ -2179,7 +2475,7 @@ var SourceUtils;
                 var _this = _super.call(this, context, LightmappedGenericMaterial) || this;
                 var gl = context;
                 _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    void main()\n                    {\n                        LightmappedBase_main();\n                    }");
-                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    void main()\n                    {\n                        vec4 modelBase = ModelBase_main();\n                        vec3 lightmapped = " + _this.uEmission + " != 0 ? modelBase.rgb : ApplyLightmap(modelBase.rgb);\n\n                        gl_FragColor = vec4(ApplyFog(lightmapped), modelBase.a);\n                    }");
+                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    void main()\n                    {\n                        vec4 modelBase = ModelBase_main();\n                        vec3 lightmapped = ".concat(_this.uEmission, " != 0 ? modelBase.rgb : ApplyLightmap(modelBase.rgb);\n\n                        gl_FragColor = vec4(ApplyFog(lightmapped), modelBase.a);\n                    }"));
                 _this.compile();
                 return _this;
             }
@@ -2225,8 +2521,8 @@ var SourceUtils;
                 _this.uHdrCompressed = _this.addUniform("uHdrCompressed", WebGame.Uniform1I);
                 _this.sortOrder = -1000;
                 var gl = context;
-                _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec2 aTextureCoord;\n                    attribute float aFace;\n\n                    varying float vFace;\n                    varying vec2 vTextureCoord;\n\n                    uniform mat4 " + _this.uProjection + ";\n                    uniform mat4 " + _this.uView + ";\n\n                    vec3 GetPosition()\n                    {\n                        vec2 pos = aTextureCoord - vec2(0.5, 0.5);\n                        int face = int(aFace + 0.5);\n                        if (face == 0) return vec3( 0.5, -pos.x, -pos.y);\n                        if (face == 1) return vec3(-0.5, pos.x, -pos.y);\n                        if (face == 2) return vec3( pos.x, 0.5, -pos.y);\n                        if (face == 3) return vec3(-pos.x, -0.5, -pos.y);\n                        if (face == 4) return vec3( pos.y,-pos.x, 0.5);\n                        if (face == 5) return vec3(-pos.y,-pos.x, -0.5);\n                        return vec3(0.0, 0.0, 0.0);\n                    }\n\n                    void main()\n                    {\n                        vec4 viewPos = " + _this.uView + " * vec4(GetPosition() * 128.0, 0.0);\n\n                        gl_Position = " + _this.uProjection + " * vec4(viewPos.xyz, 1.0);\n\n                        vFace = aFace;\n                        vTextureCoord = aTextureCoord;\n                    }");
-                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    #extension GL_EXT_frag_depth : enable\n\n                    precision mediump float;\n\n                    varying float vFace;\n                    varying vec2 vTextureCoord;\n\n                    uniform sampler2D " + _this.uFacePosX + "; uniform vec4 " + _this.uFacePosX.getSizeUniform() + ";\n                    uniform sampler2D " + _this.uFaceNegX + "; uniform vec4 " + _this.uFaceNegX.getSizeUniform() + ";\n                    uniform sampler2D " + _this.uFacePosY + "; uniform vec4 " + _this.uFacePosY.getSizeUniform() + ";\n                    uniform sampler2D " + _this.uFaceNegY + "; uniform vec4 " + _this.uFaceNegY.getSizeUniform() + ";\n                    uniform sampler2D " + _this.uFacePosZ + "; uniform vec4 " + _this.uFacePosZ.getSizeUniform() + ";\n                    uniform sampler2D " + _this.uFaceNegZ + "; uniform vec4 " + _this.uFaceNegZ.getSizeUniform() + ";\n\n                    uniform int " + _this.uHdrCompressed + ";\n\n                    vec4 GetFaceSize()\n                    {\n                        int face = int(vFace + 0.5);\n                        if (face == 0) return " + _this.uFacePosX.getSizeUniform() + ";\n                        if (face == 1) return " + _this.uFaceNegX.getSizeUniform() + ";\n                        if (face == 2) return " + _this.uFacePosY.getSizeUniform() + ";\n                        if (face == 3) return " + _this.uFaceNegY.getSizeUniform() + ";\n                        if (face == 4) return " + _this.uFacePosZ.getSizeUniform() + ";\n                        if (face == 5) return " + _this.uFaceNegZ.getSizeUniform() + ";\n                        return vec4(1.0, 1.0, 1.0, 1.0);\n                    }\n\n                    vec4 GetFaceSample(vec2 uv)\n                    {\n                        int face = int(vFace + 0.5);\n                        if (face == 0) return texture2D(" + _this.uFacePosX + ", uv);\n                        if (face == 1) return texture2D(" + _this.uFaceNegX + ", uv);\n                        if (face == 2) return texture2D(" + _this.uFacePosY + ", uv);\n                        if (face == 3) return texture2D(" + _this.uFaceNegY + ", uv);\n                        if (face == 4) return texture2D(" + _this.uFacePosZ + ", uv);\n                        if (face == 5) return texture2D(" + _this.uFaceNegZ + ", uv);\n                        return vec4(0.0, 0.0, 0.0, 1.0);\n                    }\n\n                    vec3 DecompressHdr(vec4 sample)\n                    {\n                        return sample.rgb * sample.a * 2.0;\n                    }\n\n                    void main()\n                    {\n                        if (" + _this.uHdrCompressed + " != 0) {\n                            vec4 size = GetFaceSize();\n                            vec2 scaledCoord = vTextureCoord * size.xy * vec2(1.0, size.x * size.w) - vec2(0.5, 0.5);\n                            vec2 minCoord = floor(scaledCoord) + vec2(0.5, 0.5);\n                            vec2 maxCoord = minCoord + vec2(1.0, 1.0);\n                            vec2 delta = scaledCoord - floor(scaledCoord);\n\n                            minCoord *= size.zw;\n                            maxCoord *= size.zw;\n\n                            vec3 sampleA = DecompressHdr(GetFaceSample(vec2(minCoord.x, minCoord.y)));\n                            vec3 sampleB = DecompressHdr(GetFaceSample(vec2(maxCoord.x, minCoord.y)));\n                            vec3 sampleC = DecompressHdr(GetFaceSample(vec2(minCoord.x, maxCoord.y)));\n                            vec3 sampleD = DecompressHdr(GetFaceSample(vec2(maxCoord.x, maxCoord.y)));\n\n                            vec3 sample = mix(mix(sampleA, sampleB, delta.x), mix(sampleC, sampleD, delta.x), delta.y);\n\n                            gl_FragColor = vec4(sample, 1.0);\n                        } else {\n                            vec4 sample = GetFaceSample(vTextureCoord);\n                            gl_FragColor = vec4(sample.rgb, 1.0);\n                        }\n\n                        gl_FragDepthEXT = 0.99999;\n                    }");
+                _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec2 aTextureCoord;\n                    attribute float aFace;\n\n                    varying float vFace;\n                    varying vec2 vTextureCoord;\n\n                    uniform mat4 ".concat(_this.uProjection, ";\n                    uniform mat4 ").concat(_this.uView, ";\n\n                    vec3 GetPosition()\n                    {\n                        vec2 pos = aTextureCoord - vec2(0.5, 0.5);\n                        int face = int(aFace + 0.5);\n                        if (face == 0) return vec3( 0.5, -pos.x, -pos.y);\n                        if (face == 1) return vec3(-0.5, pos.x, -pos.y);\n                        if (face == 2) return vec3( pos.x, 0.5, -pos.y);\n                        if (face == 3) return vec3(-pos.x, -0.5, -pos.y);\n                        if (face == 4) return vec3( pos.y,-pos.x, 0.5);\n                        if (face == 5) return vec3(-pos.y,-pos.x, -0.5);\n                        return vec3(0.0, 0.0, 0.0);\n                    }\n\n                    void main()\n                    {\n                        vec4 viewPos = ").concat(_this.uView, " * vec4(GetPosition() * 128.0, 0.0);\n\n                        gl_Position = ").concat(_this.uProjection, " * vec4(viewPos.xyz, 1.0);\n\n                        vFace = aFace;\n                        vTextureCoord = aTextureCoord;\n                    }"));
+                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    #extension GL_EXT_frag_depth : enable\n\n                    precision mediump float;\n\n                    varying float vFace;\n                    varying vec2 vTextureCoord;\n\n                    uniform sampler2D ".concat(_this.uFacePosX, "; uniform vec4 ").concat(_this.uFacePosX.getSizeUniform(), ";\n                    uniform sampler2D ").concat(_this.uFaceNegX, "; uniform vec4 ").concat(_this.uFaceNegX.getSizeUniform(), ";\n                    uniform sampler2D ").concat(_this.uFacePosY, "; uniform vec4 ").concat(_this.uFacePosY.getSizeUniform(), ";\n                    uniform sampler2D ").concat(_this.uFaceNegY, "; uniform vec4 ").concat(_this.uFaceNegY.getSizeUniform(), ";\n                    uniform sampler2D ").concat(_this.uFacePosZ, "; uniform vec4 ").concat(_this.uFacePosZ.getSizeUniform(), ";\n                    uniform sampler2D ").concat(_this.uFaceNegZ, "; uniform vec4 ").concat(_this.uFaceNegZ.getSizeUniform(), ";\n\n                    uniform int ").concat(_this.uHdrCompressed, ";\n\n                    vec4 GetFaceSize()\n                    {\n                        int face = int(vFace + 0.5);\n                        if (face == 0) return ").concat(_this.uFacePosX.getSizeUniform(), ";\n                        if (face == 1) return ").concat(_this.uFaceNegX.getSizeUniform(), ";\n                        if (face == 2) return ").concat(_this.uFacePosY.getSizeUniform(), ";\n                        if (face == 3) return ").concat(_this.uFaceNegY.getSizeUniform(), ";\n                        if (face == 4) return ").concat(_this.uFacePosZ.getSizeUniform(), ";\n                        if (face == 5) return ").concat(_this.uFaceNegZ.getSizeUniform(), ";\n                        return vec4(1.0, 1.0, 1.0, 1.0);\n                    }\n\n                    vec4 GetFaceSample(vec2 uv)\n                    {\n                        int face = int(vFace + 0.5);\n                        if (face == 0) return texture2D(").concat(_this.uFacePosX, ", uv);\n                        if (face == 1) return texture2D(").concat(_this.uFaceNegX, ", uv);\n                        if (face == 2) return texture2D(").concat(_this.uFacePosY, ", uv);\n                        if (face == 3) return texture2D(").concat(_this.uFaceNegY, ", uv);\n                        if (face == 4) return texture2D(").concat(_this.uFacePosZ, ", uv);\n                        if (face == 5) return texture2D(").concat(_this.uFaceNegZ, ", uv);\n                        return vec4(0.0, 0.0, 0.0, 1.0);\n                    }\n\n                    vec3 DecompressHdr(vec4 sample)\n                    {\n                        return sample.rgb * sample.a * 2.0;\n                    }\n\n                    void main()\n                    {\n                        if (").concat(_this.uHdrCompressed, " != 0) {\n                            vec4 size = GetFaceSize();\n                            vec2 scaledCoord = vTextureCoord * size.xy * vec2(1.0, size.x * size.w) - vec2(0.5, 0.5);\n                            vec2 minCoord = floor(scaledCoord) + vec2(0.5, 0.5);\n                            vec2 maxCoord = minCoord + vec2(1.0, 1.0);\n                            vec2 delta = scaledCoord - floor(scaledCoord);\n\n                            minCoord *= size.zw;\n                            maxCoord *= size.zw;\n\n                            vec3 sampleA = DecompressHdr(GetFaceSample(vec2(minCoord.x, minCoord.y)));\n                            vec3 sampleB = DecompressHdr(GetFaceSample(vec2(maxCoord.x, minCoord.y)));\n                            vec3 sampleC = DecompressHdr(GetFaceSample(vec2(minCoord.x, maxCoord.y)));\n                            vec3 sampleD = DecompressHdr(GetFaceSample(vec2(maxCoord.x, maxCoord.y)));\n\n                            vec3 sample = mix(mix(sampleA, sampleB, delta.x), mix(sampleC, sampleD, delta.x), delta.y);\n\n                            gl_FragColor = vec4(sample, 1.0);\n                        } else {\n                            vec4 sample = GetFaceSample(vTextureCoord);\n                            gl_FragColor = vec4(sample.rgb, 1.0);\n                        }\n\n                        gl_FragDepthEXT = 0.99999;\n                    }"));
                 _this.addAttribute("aTextureCoord", WebGame.VertexAttribute.uv);
                 _this.addAttribute("aFace", WebGame.VertexAttribute.alpha);
                 _this.uFacePosX.setDefault(WebGame.TextureUtils.getErrorTexture(context));
@@ -2283,7 +2579,7 @@ var SourceUtils;
                 _this.uAmbient5 = _this.addUniform("uAmbient[5]", WebGame.Uniform3F);
                 _this.uAmbient = [_this.uAmbient0, _this.uAmbient1, _this.uAmbient2, _this.uAmbient3, _this.uAmbient4, _this.uAmbient5];
                 var gl = context;
-                _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec3 aTangent;\n                    attribute vec2 aSplineParams;\n\n                    uniform vec3 uAmbient[6];\n\n                    varying vec3 vAmbient;\n\n                    vec3 SampleAmbient(vec3 normal, vec3 axis, int index)\n                    {\n                        return pow(max(0.0, dot(normal, axis)), 2.0) * pow(uAmbient[index], vec3(0.5, 0.5, 0.5));\n                    }\n\n                    void main()\n                    {\n                        vec4 viewPos = " + _this.uView + " * " + _this.uModel + " * vec4(aPosition, 1.0);\n                        vec3 viewTangent = normalize((" + _this.uView + " * " + _this.uModel + " * vec4(aTangent, 0.0)).xyz);\n                        vec3 viewNormalA = normalize(cross(viewPos.xyz, viewTangent));\n                        vec3 viewNormalB = normalize(cross(viewNormalA, viewTangent));\n\n                        vec3 viewUnitX = normalize((" + _this.uView + " * vec4(1.0, 0.0, 0.0, 0.0)).xyz);\n                        vec3 viewUnitY = normalize((" + _this.uView + " * vec4(0.0, 1.0, 0.0, 0.0)).xyz);\n                        vec3 viewUnitZ = normalize((" + _this.uView + " * vec4(0.0, 0.0, 1.0, 0.0)).xyz);\n\n                        vec3 viewNormal = normalize(viewNormalA * (aTextureCoord.x - 0.5)\n                            + viewNormalB * sqrt(1.0 - pow(1.0 - aTextureCoord.x * 2.0, 2.0)) * 0.5);\n\n                        vAmbient = SampleAmbient(viewNormal,  viewUnitX, 0)\n                                 + SampleAmbient(viewNormal, -viewUnitX, 1)\n                                 + SampleAmbient(viewNormal,  viewUnitY, 2)\n                                 + SampleAmbient(viewNormal, -viewUnitY, 3)\n                                 + SampleAmbient(viewNormal,  viewUnitZ, 4)\n                                 + SampleAmbient(viewNormal, -viewUnitZ, 5);\n\n                        viewPos.xyz += viewNormal * aSplineParams.x;\n                        viewPos.xyz += viewUnitZ * aSplineParams.y;\n\n                        gl_Position = " + _this.uProjection + " * viewPos;\n\n                        vTextureCoord = aTextureCoord;\n                        vDepth = -viewPos.z;\n                    }");
+                _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec3 aTangent;\n                    attribute vec2 aSplineParams;\n\n                    uniform vec3 uAmbient[6];\n\n                    varying vec3 vAmbient;\n\n                    vec3 SampleAmbient(vec3 normal, vec3 axis, int index)\n                    {\n                        return pow(max(0.0, dot(normal, axis)), 2.0) * pow(uAmbient[index], vec3(0.5, 0.5, 0.5));\n                    }\n\n                    void main()\n                    {\n                        vec4 viewPos = ".concat(_this.uView, " * ").concat(_this.uModel, " * vec4(aPosition, 1.0);\n                        vec3 viewTangent = normalize((").concat(_this.uView, " * ").concat(_this.uModel, " * vec4(aTangent, 0.0)).xyz);\n                        vec3 viewNormalA = normalize(cross(viewPos.xyz, viewTangent));\n                        vec3 viewNormalB = normalize(cross(viewNormalA, viewTangent));\n\n                        vec3 viewUnitX = normalize((").concat(_this.uView, " * vec4(1.0, 0.0, 0.0, 0.0)).xyz);\n                        vec3 viewUnitY = normalize((").concat(_this.uView, " * vec4(0.0, 1.0, 0.0, 0.0)).xyz);\n                        vec3 viewUnitZ = normalize((").concat(_this.uView, " * vec4(0.0, 0.0, 1.0, 0.0)).xyz);\n\n                        vec3 viewNormal = normalize(viewNormalA * (aTextureCoord.x - 0.5)\n                            + viewNormalB * sqrt(1.0 - pow(1.0 - aTextureCoord.x * 2.0, 2.0)) * 0.5);\n\n                        vAmbient = SampleAmbient(viewNormal,  viewUnitX, 0)\n                                 + SampleAmbient(viewNormal, -viewUnitX, 1)\n                                 + SampleAmbient(viewNormal,  viewUnitY, 2)\n                                 + SampleAmbient(viewNormal, -viewUnitY, 3)\n                                 + SampleAmbient(viewNormal,  viewUnitZ, 4)\n                                 + SampleAmbient(viewNormal, -viewUnitZ, 5);\n\n                        viewPos.xyz += viewNormal * aSplineParams.x;\n                        viewPos.xyz += viewUnitZ * aSplineParams.y;\n\n                        gl_Position = ").concat(_this.uProjection, " * viewPos;\n\n                        vTextureCoord = aTextureCoord;\n                        vDepth = -viewPos.z;\n                    }"));
                 _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    varying vec3 vAmbient;\n\n                    void main()\n                    {\n                        vec4 mainSample = ModelBase_main();\n                        gl_FragColor = vec4(ApplyFog(mainSample.rgb * vAmbient), mainSample.a);\n                    }");
                 _this.addAttribute("aTangent", WebGame.VertexAttribute.normal);
                 _this.addAttribute("aSplineParams", WebGame.VertexAttribute.uv2);
@@ -2355,7 +2651,7 @@ var SourceUtils;
             function VertexLitGeneric(context) {
                 var _this = _super.call(this, context, VertexLitGenericMaterial) || this;
                 var gl = context;
-                _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec3 aEncodedColors;\n\n                    varying vec3 vVertexLighting;\n                    varying vec3 vAlbedoModulation;\n\n                    void main()\n                    {\n                        vVertexLighting = " + _this.uEmission + " != 0 ? vec3(1.0, 1.0, 1.0) : floor(aEncodedColors) * (2.0 / 255.0);\n                        vAlbedoModulation = fract(aEncodedColors) * (256.0 / 255.0);\n\n                        ModelBase_main();\n                    }");
+                _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    attribute vec3 aEncodedColors;\n\n                    varying vec3 vVertexLighting;\n                    varying vec3 vAlbedoModulation;\n\n                    void main()\n                    {\n                        vVertexLighting = ".concat(_this.uEmission, " != 0 ? vec3(1.0, 1.0, 1.0) : floor(aEncodedColors) * (2.0 / 255.0);\n                        vAlbedoModulation = fract(aEncodedColors) * (256.0 / 255.0);\n\n                        ModelBase_main();\n                    }"));
                 _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    varying vec3 vVertexLighting;\n                    varying vec3 vAlbedoModulation;\n\n                    void main()\n                    {\n                        vec4 mainSample = ModelBase_main();\n                        gl_FragColor = vec4(ApplyFog(mainSample.rgb * vVertexLighting * vAlbedoModulation), mainSample.a);\n                    }");
                 _this.addAttribute("aEncodedColors", WebGame.VertexAttribute.rgb);
                 _this.compile();
@@ -2408,7 +2704,7 @@ var SourceUtils;
                 _this.sortOrder = -10;
                 var gl = context;
                 _this.includeShaderSource(gl.VERTEX_SHADER, "\n                    void main()\n                    {\n                        LightmappedBase_main();\n                    }");
-                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    uniform vec3 " + _this.uCameraPos + ";\n\n                    uniform vec4 " + _this.uScreenParams + ";\n                    uniform highp mat4 " + _this.uProjection + ";\n                    uniform mat4 " + _this.uInverseProjection + ";\n                    uniform mat4 " + _this.uInverseView + ";\n\n                    uniform sampler2D " + _this.uOpaqueColor + ";\n                    uniform sampler2D " + _this.uOpaqueDepth + ";\n\n                    uniform vec4 " + _this.uWaterFogParams + ";\n                    uniform vec3 " + _this.uWaterFogColor + ";\n                    uniform float " + _this.uWaterFogLightmapped + ";\n\n                    uniform sampler2D " + _this.uNormalMap + ";\n                    uniform vec3 " + _this.uRefractTint + ";\n\n                    vec4 CalcEyeFromWindow(in vec3 fragCoord)\n                    {\n                        vec3 ndcPos;\n                        ndcPos.xy = (2.0 * fragCoord.xy) * (uScreenParams.zw) - vec2(1.0, 1.0);\n                        ndcPos.z = (2.0 * fragCoord.z - gl_DepthRange.near - gl_DepthRange.far) / (gl_DepthRange.far - gl_DepthRange.near);\n\n                        vec4 clipPos;\n                        clipPos.w = " + _this.uProjection + "[3][2] / (ndcPos.z - (" + _this.uProjection + "[2][2] / " + _this.uProjection + "[2][3]));\n                        clipPos.xyz = ndcPos * clipPos.w;\n\n                        return " + _this.uInverseProjection + " * clipPos;\n                    }\n\n                    vec3 GetWorldPos(vec3 coord)\n                    {\n                        return (" + _this.uInverseView + " * CalcEyeFromWindow(coord * vec3(" + _this.uScreenParams + ".xy, 1.0))).xyz;\n                    }\n\n                    void main()\n                    {\n                        vec2 screenPos = gl_FragCoord.xy * " + _this.uScreenParams + ".zw;\n\n                        vec3 normalSample = texture2D(" + _this.uNormalMap + ", vTextureCoord).xyz;\n                        vec3 normal = normalize(normalSample - vec3(0.5, 0.5, 0.5));\n                        vec3 surfacePos = GetWorldPos(vec3(screenPos, gl_FragCoord.z));\n                        vec3 viewDir = normalize(surfacePos - uCameraPos);\n\n                        vec3 lightmap = ApplyLightmap(vec3(1.0, 1.0, 1.0));\n                        float normalDot = abs(dot(viewDir, normal));\n\n                        float opaqueDepthSample = texture2D(" + _this.uOpaqueDepth + ", screenPos).r;\n                        vec3 opaquePos = GetWorldPos(vec3(screenPos, opaqueDepthSample));\n                        float opaqueDepth = length(surfacePos - opaquePos);\n                        vec2 refractedScreenPos = screenPos + normal.xy * min(opaqueDepth, 128.0) / max(512.0, length(surfacePos - " + _this.uCameraPos + ") * 2.0);\n                        float refractedOpaqueDepthSample = texture2D(" + _this.uOpaqueDepth + ", refractedScreenPos).r;\n\n                        vec3 opaqueColor;\n                        if (refractedOpaqueDepthSample > gl_FragCoord.z) {\n                            opaqueColor = texture2D(" + _this.uOpaqueColor + ", refractedScreenPos).rgb;\n                            opaqueDepth = length(surfacePos - GetWorldPos(vec3(refractedScreenPos, refractedOpaqueDepthSample)));\n                        } else {\n                            opaqueColor = texture2D(" + _this.uOpaqueColor + ", screenPos).rgb;\n                            opaqueDepth = length(surfacePos - opaquePos);\n                        }\n\n                        float relativeDepth = (opaqueDepth - " + _this.uWaterFogParams + ".x) * " + _this.uWaterFogParams + ".y;\n                        float fogDensity = max(" + _this.uWaterFogParams + ".z, min(" + _this.uWaterFogParams + ".w * 0.5, relativeDepth));\n\n                        vec3 waterFogColor = " + _this.uWaterFogColor + ";\n\n                        if (" + _this.uWaterFogLightmapped + " > 0.5) {\n                            waterFogColor *= lightmap;\n                        }\n\n                        vec3 waterFogged = mix(opaqueColor, ApplyFog(waterFogColor), fogDensity);\n                        gl_FragColor = vec4(waterFogged, 1.0);\n                    }");
+                _this.includeShaderSource(gl.FRAGMENT_SHADER, "\n                    precision mediump float;\n\n                    uniform vec3 ".concat(_this.uCameraPos, ";\n\n                    uniform vec4 ").concat(_this.uScreenParams, ";\n                    uniform highp mat4 ").concat(_this.uProjection, ";\n                    uniform mat4 ").concat(_this.uInverseProjection, ";\n                    uniform mat4 ").concat(_this.uInverseView, ";\n\n                    uniform sampler2D ").concat(_this.uOpaqueColor, ";\n                    uniform sampler2D ").concat(_this.uOpaqueDepth, ";\n\n                    uniform vec4 ").concat(_this.uWaterFogParams, ";\n                    uniform vec3 ").concat(_this.uWaterFogColor, ";\n                    uniform float ").concat(_this.uWaterFogLightmapped, ";\n\n                    uniform sampler2D ").concat(_this.uNormalMap, ";\n                    uniform vec3 ").concat(_this.uRefractTint, ";\n\n                    vec4 CalcEyeFromWindow(in vec3 fragCoord)\n                    {\n                        vec3 ndcPos;\n                        ndcPos.xy = (2.0 * fragCoord.xy) * (uScreenParams.zw) - vec2(1.0, 1.0);\n                        ndcPos.z = (2.0 * fragCoord.z - gl_DepthRange.near - gl_DepthRange.far) / (gl_DepthRange.far - gl_DepthRange.near);\n\n                        vec4 clipPos;\n                        clipPos.w = ").concat(_this.uProjection, "[3][2] / (ndcPos.z - (").concat(_this.uProjection, "[2][2] / ").concat(_this.uProjection, "[2][3]));\n                        clipPos.xyz = ndcPos * clipPos.w;\n\n                        return ").concat(_this.uInverseProjection, " * clipPos;\n                    }\n\n                    vec3 GetWorldPos(vec3 coord)\n                    {\n                        return (").concat(_this.uInverseView, " * CalcEyeFromWindow(coord * vec3(").concat(_this.uScreenParams, ".xy, 1.0))).xyz;\n                    }\n\n                    void main()\n                    {\n                        vec2 screenPos = gl_FragCoord.xy * ").concat(_this.uScreenParams, ".zw;\n\n                        vec3 normalSample = texture2D(").concat(_this.uNormalMap, ", vTextureCoord).xyz;\n                        vec3 normal = normalize(normalSample - vec3(0.5, 0.5, 0.5));\n                        vec3 surfacePos = GetWorldPos(vec3(screenPos, gl_FragCoord.z));\n                        vec3 viewDir = normalize(surfacePos - uCameraPos);\n\n                        vec3 lightmap = ApplyLightmap(vec3(1.0, 1.0, 1.0));\n                        float normalDot = abs(dot(viewDir, normal));\n\n                        float opaqueDepthSample = texture2D(").concat(_this.uOpaqueDepth, ", screenPos).r;\n                        vec3 opaquePos = GetWorldPos(vec3(screenPos, opaqueDepthSample));\n                        float opaqueDepth = length(surfacePos - opaquePos);\n                        vec2 refractedScreenPos = screenPos + normal.xy * min(opaqueDepth, 128.0) / max(512.0, length(surfacePos - ").concat(_this.uCameraPos, ") * 2.0);\n                        float refractedOpaqueDepthSample = texture2D(").concat(_this.uOpaqueDepth, ", refractedScreenPos).r;\n\n                        vec3 opaqueColor;\n                        if (refractedOpaqueDepthSample > gl_FragCoord.z) {\n                            opaqueColor = texture2D(").concat(_this.uOpaqueColor, ", refractedScreenPos).rgb;\n                            opaqueDepth = length(surfacePos - GetWorldPos(vec3(refractedScreenPos, refractedOpaqueDepthSample)));\n                        } else {\n                            opaqueColor = texture2D(").concat(_this.uOpaqueColor, ", screenPos).rgb;\n                            opaqueDepth = length(surfacePos - opaquePos);\n                        }\n\n                        float relativeDepth = (opaqueDepth - ").concat(_this.uWaterFogParams, ".x) * ").concat(_this.uWaterFogParams, ".y;\n                        float fogDensity = max(").concat(_this.uWaterFogParams, ".z, min(").concat(_this.uWaterFogParams, ".w * 0.5, relativeDepth));\n\n                        vec3 waterFogColor = ").concat(_this.uWaterFogColor, ";\n\n                        if (").concat(_this.uWaterFogLightmapped, " > 0.5) {\n                            waterFogColor *= lightmap;\n                        }\n\n                        vec3 waterFogged = mix(opaqueColor, ApplyFog(waterFogColor), fogDensity);\n                        gl_FragColor = vec4(waterFogged, 1.0);\n                    }"));
                 _this.uOpaqueColor.setDefault(WebGame.TextureUtils.getErrorTexture(context));
                 _this.uOpaqueDepth.setDefault(WebGame.TextureUtils.getBlackTexture(context));
                 _this.uNormalMap.setDefault(WebGame.TextureUtils.getErrorTexture(context));

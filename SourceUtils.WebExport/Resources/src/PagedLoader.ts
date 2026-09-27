@@ -133,7 +133,7 @@
                 let lastProgress = 0;
 
                 ++this.active;
-                Facepunch.Http.getJson<TPayload>(next.url, page => {
+                PageWorker.getJson<TPayload>(next.url, page => {
                     --this.active;
                     this.loadProgress += 1 - lastProgress;
                     lastProgress = 1;

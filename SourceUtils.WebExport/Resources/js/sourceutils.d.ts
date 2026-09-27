@@ -1,4 +1,3 @@
-/// <reference path="facepunch.webgame.d.ts" />
 declare namespace SourceUtils {
     interface IPageRequest<TValue, TPage> {
         index: number;
@@ -159,6 +158,18 @@ declare namespace SourceUtils {
         readonly viewer: MapViewer;
         constructor(viewer: MapViewer);
         protected onCreatePage(page: IPageInfo): DispGeometryPage;
+    }
+}
+declare namespace SourceUtils {
+    /**
+     * Replaces Facepunch.Http.getImage with fetch + createImageBitmap, so
+     * texture images are decoded off the main thread instead of synchronously
+     * inside texImage2D. Bitmaps match WebGame's upload defaults (no flip, no
+     * premultiplied alpha). Browsers without createImageBitmap keep <img>.
+     */
+    class ImageBitmapLoader {
+        private static installed;
+        static install(): void;
     }
 }
 declare namespace SourceUtils {
@@ -324,10 +335,42 @@ declare namespace SourceUtils {
         private lastDrawCalls;
         private allLoaded;
         protected onSetDebugText(className: string, value: string): void;
+        /**
+         * Milliseconds per frame spent on work queued with deferWork. Keeps a
+         * burst of loaded resources (e.g. every static prop of a model page)
+         * from stalling the frame; at least one item runs per frame.
+         */
+        deferredWorkBudgetMs: number;
+        private readonly deferredWork;
+        private deferredWorkIndex;
+        /** Queues main-thread work to run over the next frames within deferredWorkBudgetMs. */
+        deferWork(work: () => void): void;
+        private runDeferredWork;
         private readonly onUpdateFrame_temp;
         protected onUpdateFrame(dt: number): void;
         protected onRenderFrame(dt: number): void;
         populateCommandBufferParameters(buf: WebGame.CommandBuffer): void;
+    }
+}
+declare namespace SourceUtils {
+    /**
+     * Downloads, parses and decompresses resource pages on a Web Worker so
+     * that the main thread (and every map viewer on the page) keeps drawing
+     * frames while a map streams in.
+     *
+     * The worker replaces LZ-compressed mesh vertex/index strings with
+     * transferred Float32Array/Uint32Array buffers and vertex lighting strings
+     * with arrays; the page loaders' decompress calls then pass these through
+     * unchanged. Falls back to Facepunch.Http.getJson when workers are
+     * unavailable (e.g. blocked by a content security policy).
+     */
+    class PageWorker {
+        private static worker;
+        private static failed;
+        private static nextId;
+        private static readonly callbacks;
+        static getJson<TPayload>(url: string, success: (payload: TPayload) => void, failure?: (error: any) => void, progress?: (loaded: number, total: number) => void): void;
+        private static getWorker;
     }
 }
 declare namespace SourceUtils {
