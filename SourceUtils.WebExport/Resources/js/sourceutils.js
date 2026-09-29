@@ -1958,7 +1958,8 @@ var SourceUtils;
             Camera.prototype.getLeaf = function () {
                 if (this.leafInvalid) {
                     var leaf = this.onGetLeaf();
-                    this.leafInvalid = leaf !== undefined;
+                    // undefined: the world isn't loaded yet, so look again next time.
+                    this.leafInvalid = leaf === undefined;
                     if (this.leaf !== leaf) {
                         this.leaf = leaf;
                         this.invalidateGeometry();
