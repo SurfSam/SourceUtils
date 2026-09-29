@@ -392,6 +392,10 @@ var SourceUtils;
      * Every later MapViewer then binds a texture from another context, which
      * WebGL rejects, so the sampler reads whatever texture its unit last held.
      * This makes the getters keep one texture per context.
+     *
+     * The textures are held in WeakMaps keyed by context: a strong list would
+     * keep every context ever created alive, and with it its canvas, viewer
+     * and whole map (the replay splicer creates a viewer per map).
      */
     var ContextTextures = /** @class */ (function () {
         function ContextTextures() {
@@ -410,16 +414,17 @@ var SourceUtils;
             var _loop_2 = function (getter) {
                 var field = getters[getter];
                 var create = utils[getter];
-                var created = [];
+                var created = new WeakMap();
                 utils[getter] = function (context) {
-                    for (var i = 0; i < created.length; ++i) {
-                        if (created[i].context === context)
-                            return created[i].texture;
-                    }
+                    var existing = created.get(context);
+                    if (existing != null)
+                        return existing;
                     // The original returns its cached texture if the field is set.
                     utils[field] = null;
                     var texture = create.call(utils, context);
-                    created.push({ context: context, texture: texture });
+                    // Nor may the static field keep the last context alive.
+                    utils[field] = null;
+                    created.set(context, texture);
                     return texture;
                 };
             };

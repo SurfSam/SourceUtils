@@ -152,6 +152,10 @@ declare namespace SourceUtils {
      * Every later MapViewer then binds a texture from another context, which
      * WebGL rejects, so the sampler reads whatever texture its unit last held.
      * This makes the getters keep one texture per context.
+     *
+     * The textures are held in WeakMaps keyed by context: a strong list would
+     * keep every context ever created alive, and with it its canvas, viewer
+     * and whole map (the replay splicer creates a viewer per map).
      */
     class ContextTextures {
         private static installed;
