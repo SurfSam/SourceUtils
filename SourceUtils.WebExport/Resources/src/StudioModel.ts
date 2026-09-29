@@ -241,7 +241,7 @@ namespace SourceUtils {
         }
 
         update(requestQuota: number): number {
-            return super.update(this.viewer.visLoader.getLoadProgress() < 1 ? 0 : requestQuota);
+            return super.update(this.viewer.visLoader.isBusy() ? 0 : requestQuota);
         }
 
         loadModel(index: number): StudioModel {
@@ -294,7 +294,7 @@ namespace SourceUtils {
         }
 
         update(requestQuota: number): number {
-            return super.update(this.viewer.visLoader.getLoadProgress() < 1 ? 0 : requestQuota);
+            return super.update(this.viewer.visLoader.isBusy() ? 0 : requestQuota);
         }
 
         onCreatePage(page: IPageInfo): VertexLightingPage {

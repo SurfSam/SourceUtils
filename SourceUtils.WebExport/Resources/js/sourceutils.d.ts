@@ -25,6 +25,11 @@ declare namespace SourceUtils {
         protected abstract onCreatePage(page: IPageInfo): TPage;
         throwIfNotFound: boolean;
         getLoadProgress(): number;
+        /**
+         * True while a page something asked for is loading or waiting to. Pages
+         * nobody asked for are never loaded, so they don't count.
+         */
+        isBusy(): boolean;
         load(index: number, callback: (payload: TValue, page: TPage) => void): TValue;
         setPageLayout(pages: IPageInfo[]): void;
         private getNextToLoad;

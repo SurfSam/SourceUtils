@@ -63,6 +63,19 @@ var SourceUtils;
         PagedLoader.prototype.getLoadProgress = function () {
             return this.pages == null ? 0 : this.loadProgress / this.pages.length;
         };
+        /**
+         * True while a page something asked for is loading or waiting to. Pages
+         * nobody asked for are never loaded, so they don't count.
+         */
+        PagedLoader.prototype.isBusy = function () {
+            if (this.active > 0)
+                return true;
+            for (var i = 0, iEnd = this.toLoad.length; i < iEnd; ++i) {
+                if (this.toLoad[i].getLoadPriority() > 0)
+                    return true;
+            }
+            return false;
+        };
         PagedLoader.prototype.load = function (index, callback) {
             if (this.pages == null) {
                 throw new Error("Page layout not loaded.");
@@ -1635,7 +1648,7 @@ var SourceUtils;
             return _this;
         }
         StudioModelLoader.prototype.update = function (requestQuota) {
-            return _super.prototype.update.call(this, this.viewer.visLoader.getLoadProgress() < 1 ? 0 : requestQuota);
+            return _super.prototype.update.call(this, this.viewer.visLoader.isBusy() ? 0 : requestQuota);
         };
         StudioModelLoader.prototype.loadModel = function (index) {
             var model = this.models[index];
@@ -1683,7 +1696,7 @@ var SourceUtils;
             return _this;
         }
         VertexLightingLoader.prototype.update = function (requestQuota) {
-            return _super.prototype.update.call(this, this.viewer.visLoader.getLoadProgress() < 1 ? 0 : requestQuota);
+            return _super.prototype.update.call(this, this.viewer.visLoader.isBusy() ? 0 : requestQuota);
         };
         VertexLightingLoader.prototype.onCreatePage = function (page) {
             return new VertexLightingPage(page);
