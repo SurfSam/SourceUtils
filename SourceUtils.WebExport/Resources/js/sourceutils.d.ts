@@ -146,6 +146,19 @@ declare namespace SourceUtils {
     }
 }
 declare namespace SourceUtils {
+    /**
+     * WebGame.TextureUtils keeps its white, black, translucent and error
+     * textures in static fields, created for whichever GL context asks first.
+     * Every later MapViewer then binds a texture from another context, which
+     * WebGL rejects, so the sampler reads whatever texture its unit last held.
+     * This makes the getters keep one texture per context.
+     */
+    class ContextTextures {
+        private static installed;
+        static install(): void;
+    }
+}
+declare namespace SourceUtils {
     import WebGame = Facepunch.WebGame;
     interface IDispGeometryPage {
         displacements: IFace[];

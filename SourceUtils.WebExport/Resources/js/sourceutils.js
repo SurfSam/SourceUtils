@@ -383,6 +383,55 @@ var SourceUtils;
     }(SourceUtils.PagedLoader));
     SourceUtils.BspModelLoader = BspModelLoader;
 })(SourceUtils || (SourceUtils = {}));
+var SourceUtils;
+(function (SourceUtils) {
+    var WebGame = Facepunch.WebGame;
+    /**
+     * WebGame.TextureUtils keeps its white, black, translucent and error
+     * textures in static fields, created for whichever GL context asks first.
+     * Every later MapViewer then binds a texture from another context, which
+     * WebGL rejects, so the sampler reads whatever texture its unit last held.
+     * This makes the getters keep one texture per context.
+     */
+    var ContextTextures = /** @class */ (function () {
+        function ContextTextures() {
+        }
+        ContextTextures.install = function () {
+            if (ContextTextures.installed)
+                return;
+            ContextTextures.installed = true;
+            var utils = WebGame.TextureUtils;
+            var getters = {
+                getWhiteTexture: "whiteTexture",
+                getBlackTexture: "blackTexture",
+                getTranslucentTexture: "translucentTexture",
+                getErrorTexture: "errorTexture"
+            };
+            var _loop_2 = function (getter) {
+                var field = getters[getter];
+                var create = utils[getter];
+                var created = [];
+                utils[getter] = function (context) {
+                    for (var i = 0; i < created.length; ++i) {
+                        if (created[i].context === context)
+                            return created[i].texture;
+                    }
+                    // The original returns its cached texture if the field is set.
+                    utils[field] = null;
+                    var texture = create.call(utils, context);
+                    created.push({ context: context, texture: texture });
+                    return texture;
+                };
+            };
+            for (var getter in getters) {
+                _loop_2(getter);
+            }
+        };
+        ContextTextures.installed = false;
+        return ContextTextures;
+    }());
+    SourceUtils.ContextTextures = ContextTextures;
+})(SourceUtils || (SourceUtils = {}));
 /// <reference path="PagedLoader.ts"/>
 var SourceUtils;
 (function (SourceUtils) {
@@ -397,7 +446,7 @@ var SourceUtils;
         DispGeometryPage.prototype.onLoadValues = function (page) {
             this.matGroups = new Array(page.materials.length);
             this.dispFaces = page.displacements;
-            var _loop_2 = function (i, iEnd) {
+            var _loop_3 = function (i, iEnd) {
                 var matGroup = page.materials[i];
                 var mat = this_2.viewer.mapMaterialLoader.loadMaterial(matGroup.material);
                 var data = WebGame.MeshManager.decompress(matGroup.meshData);
@@ -405,7 +454,7 @@ var SourceUtils;
             };
             var this_2 = this;
             for (var i = 0, iEnd = page.materials.length; i < iEnd; ++i) {
-                _loop_2(i, iEnd);
+                _loop_3(i, iEnd);
             }
             _super.prototype.onLoadValues.call(this, page);
         };
@@ -492,7 +541,7 @@ var SourceUtils;
         LeafGeometryPage.prototype.onLoadValues = function (page) {
             this.matGroups = new Array(page.materials.length);
             this.leafFaces = page.leaves;
-            var _loop_3 = function (i, iEnd) {
+            var _loop_4 = function (i, iEnd) {
                 var matGroup = page.materials[i];
                 var mat = this_3.viewer.mapMaterialLoader.loadMaterial(matGroup.material);
                 var data = WebGame.MeshManager.decompress(matGroup.meshData);
@@ -500,7 +549,7 @@ var SourceUtils;
             };
             var this_3 = this;
             for (var i = 0, iEnd = page.materials.length; i < iEnd; ++i) {
-                _loop_3(i, iEnd);
+                _loop_4(i, iEnd);
             }
             _super.prototype.onLoadValues.call(this, page);
         };
@@ -828,6 +877,7 @@ var SourceUtils;
         function MapViewer(container) {
             var _this = this;
             SourceUtils.ImageBitmapLoader.install();
+            SourceUtils.ContextTextures.install();
             _this = _super.call(this, container) || this;
             _this.map = new SourceUtils.Map(_this);
             _this.visLoader = _this.addLoader(new SourceUtils.VisLoader());

@@ -47,6 +47,7 @@ namespace SourceUtils {
 
         constructor(container: HTMLElement) {
             ImageBitmapLoader.install();
+            ContextTextures.install();
             super(container);
 
             container.classList.add("map-viewer");
