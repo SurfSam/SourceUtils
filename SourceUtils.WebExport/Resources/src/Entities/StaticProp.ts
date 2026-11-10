@@ -56,7 +56,10 @@ namespace SourceUtils {
                 if (!this.model.isLoaded()) return;
                 if (this.lighting === undefined) return;
 
-                this.drawable.addMeshHandles(this.model.createMeshHandles(0, this.getMatrix(), this.lighting, this.albedoModulation));
+                // Building a prop's meshes is costly and a model page loads many props at once.
+                this.map.viewer.deferWork(() => {
+                    this.drawable.addMeshHandles(this.model.createMeshHandles(0, this.getMatrix(), this.lighting, this.albedoModulation));
+                });
             }
         }
     }

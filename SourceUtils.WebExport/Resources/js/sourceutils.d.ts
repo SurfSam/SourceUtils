@@ -1,4 +1,3 @@
-/// <reference path="facepunch.webgame.d.ts" />
 declare namespace SourceUtils {
     interface IPageRequest<TValue, TPage> {
         index: number;
@@ -26,6 +25,11 @@ declare namespace SourceUtils {
         protected abstract onCreatePage(page: IPageInfo): TPage;
         throwIfNotFound: boolean;
         getLoadProgress(): number;
+        /**
+         * True while a page something asked for is loading or waiting to. Pages
+         * nobody asked for are never loaded, so they don't count.
+         */
+        isBusy(): boolean;
         load(index: number, callback: (payload: TValue, page: TPage) => void): TValue;
         setPageLayout(pages: IPageInfo[]): void;
         private getNextToLoad;
@@ -142,6 +146,23 @@ declare namespace SourceUtils {
     }
 }
 declare namespace SourceUtils {
+    /**
+     * WebGame.TextureUtils keeps its white, black, translucent and error
+     * textures in static fields, created for whichever GL context asks first.
+     * Every later MapViewer then binds a texture from another context, which
+     * WebGL rejects, so the sampler reads whatever texture its unit last held.
+     * This makes the getters keep one texture per context.
+     *
+     * The textures are held in WeakMaps keyed by context: a strong list would
+     * keep every context ever created alive, and with it its canvas, viewer
+     * and whole map (the replay splicer creates a viewer per map).
+     */
+    class ContextTextures {
+        private static installed;
+        static install(): void;
+    }
+}
+declare namespace SourceUtils {
     import WebGame = Facepunch.WebGame;
     interface IDispGeometryPage {
         displacements: IFace[];
@@ -159,6 +180,18 @@ declare namespace SourceUtils {
         readonly viewer: MapViewer;
         constructor(viewer: MapViewer);
         protected onCreatePage(page: IPageInfo): DispGeometryPage;
+    }
+}
+declare namespace SourceUtils {
+    /**
+     * Replaces Facepunch.Http.getImage with fetch + createImageBitmap, so
+     * texture images are decoded off the main thread instead of synchronously
+     * inside texImage2D. Bitmaps match WebGame's upload defaults (no flip, no
+     * premultiplied alpha). Browsers without createImageBitmap keep <img>.
+     */
+    class ImageBitmapLoader {
+        private static installed;
+        static install(): void;
     }
 }
 declare namespace SourceUtils {
@@ -324,10 +357,44 @@ declare namespace SourceUtils {
         private lastDrawCalls;
         private allLoaded;
         protected onSetDebugText(className: string, value: string): void;
+        /**
+         * Milliseconds per frame spent on work queued with deferWork. Keeps a
+         * burst of loaded resources (e.g. every static prop of a model page)
+         * from stalling the frame; at least one item runs per frame.
+         */
+        deferredWorkBudgetMs: number;
+        private readonly deferredWork;
+        private deferredWorkIndex;
+        /** Queues main-thread work to run over the next frames within deferredWorkBudgetMs. */
+        deferWork(work: () => void): void;
+        private runDeferredWork;
         private readonly onUpdateFrame_temp;
         protected onUpdateFrame(dt: number): void;
         protected onRenderFrame(dt: number): void;
         populateCommandBufferParameters(buf: WebGame.CommandBuffer): void;
+    }
+}
+declare namespace SourceUtils {
+    /**
+     * Downloads, parses and decompresses resource pages on a Web Worker so
+     * that the main thread (and every map viewer on the page) keeps drawing
+     * frames while a map streams in.
+     *
+     * The worker replaces LZ-compressed mesh vertex/index strings with
+     * transferred Float32Array/Uint32Array buffers and vertex lighting strings
+     * with arrays; the page loaders' decompress calls then pass these through
+     * unchanged. Falls back to Facepunch.Http.getJson when workers are
+     * unavailable (e.g. blocked by a content security policy).
+     */
+    class PageWorker {
+        private static worker;
+        private static failed;
+        private static nextId;
+        private static readonly callbacks;
+        static getJson<TPayload>(url: string, success: (payload: TPayload) => void, failure?: (error: any) => void, progress?: (loaded: number, total: number) => void): void;
+        /** The worker itself broke (not one request): finish everything on the main thread from now on. */
+        private static abandonWorker;
+        private static getWorker;
     }
 }
 declare namespace SourceUtils {

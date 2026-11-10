@@ -77,6 +77,18 @@
             return this.pages == null ? 0 : this.loadProgress / this.pages.length;
         }
 
+        /**
+         * True while a page something asked for is loading or waiting to. Pages
+         * nobody asked for are never loaded, so they don't count.
+         */
+        isBusy(): boolean {
+            if (this.active > 0) return true;
+            for (let i = 0, iEnd = this.toLoad.length; i < iEnd; ++i) {
+                if (this.toLoad[i].getLoadPriority() > 0) return true;
+            }
+            return false;
+        }
+
         load(index: number, callback: (payload: TValue, page: TPage) => void): TValue {
             if (this.pages == null) {
                 throw new Error("Page layout not loaded.");
@@ -133,7 +145,7 @@
                 let lastProgress = 0;
 
                 ++this.active;
-                Facepunch.Http.getJson<TPayload>(next.url, page => {
+                PageWorker.getJson<TPayload>(next.url, page => {
                     --this.active;
                     this.loadProgress += 1 - lastProgress;
                     lastProgress = 1;

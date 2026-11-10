@@ -46,6 +46,8 @@ namespace SourceUtils {
         notMovedTime: number;
 
         constructor(container: HTMLElement) {
+            ImageBitmapLoader.install();
+            ContextTextures.install();
             super(container);
 
             container.classList.add("map-viewer");
@@ -312,11 +314,41 @@ namespace SourceUtils {
             }
         }
 
+        /**
+         * Milliseconds per frame spent on work queued with deferWork. Keeps a
+         * burst of loaded resources (e.g. every static prop of a model page)
+         * from stalling the frame; at least one item runs per frame.
+         */
+        deferredWorkBudgetMs = 4;
+
+        private readonly deferredWork: (() => void)[] = [];
+        private deferredWorkIndex = 0;
+
+        /** Queues main-thread work to run over the next frames within deferredWorkBudgetMs. */
+        deferWork(work: () => void): void {
+            this.deferredWork.push(work);
+        }
+
+        private runDeferredWork(): void {
+            const queue = this.deferredWork;
+            if (this.deferredWorkIndex >= queue.length) return;
+            const deadline = performance.now() + this.deferredWorkBudgetMs;
+            do {
+                const work = queue[this.deferredWorkIndex++];
+                work();
+            } while (this.deferredWorkIndex < queue.length && performance.now() < deadline);
+            if (this.deferredWorkIndex >= queue.length) {
+                queue.length = 0;
+                this.deferredWorkIndex = 0;
+            }
+        }
+
         private readonly onUpdateFrame_temp = new Facepunch.Vector3();
 
         protected onUpdateFrame(dt: number): void {
             super.onUpdateFrame(dt);
 
+            this.runDeferredWork();
             this.map.update(dt);
 
             if (this.showDebugPanel !== this.debugPanelVisible) {
